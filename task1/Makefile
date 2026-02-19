@@ -1,5 +1,5 @@
-ID := 2022B4A70596P
-SRC := custom_lock_2022B4A70596P.c
+ID := 2022xxxx
+SRC := custom_lock.c
 TARGET := $(ID)
 
 CC := gcc
