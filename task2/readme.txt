@@ -1,7 +1,7 @@
 The problem is a 2D heat equation on a square metal plate.
 Each row can be computed independently within the same timestep.
 
-1. Firstly, modifying file (1) TempGrid_HW3.c -> openmp_sol1_2022B4A70596P.c
+1. Firstly, modifying file (1) TempGrid_HW3.c -> openmp_sol1_2022xxxx.c
     Logic:
         Compute new through parallel for
         copy new -> old through parallel for
@@ -31,7 +31,7 @@ Each row can be computed independently within the same timestep.
             ....
         }
 
-2. Modifying file (2) HW3_1.c -> openmp_sol2_2022B4A70596P.c
+2. Modifying file (2) HW3_1.c -> openmp_sol2_2022xxxx.c
     Now instead of copying the complete grid every time, we swap pointers to the grid. This reduces the huge copying overhead.
     Similar to HW3_1.c we define:
         float (*old)[Y_SIZE];
@@ -46,7 +46,7 @@ Each row can be computed independently within the same timestep.
             new=temp;
         }
 
-3. Modifying file (3) HW3_2.c -> openmp_sol3_2022B4A70596P.c
+3. Modifying file (3) HW3_2.c -> openmp_sol3_2022xxxx.c
     This file uses the swapping pointers approach along wth a computational efficiency.
     As the grid is symmetrical, temperature(j,k)==temperature(X_SIZE-1-j, k)
     So we can compute the left half and mirror it to right half.
@@ -68,6 +68,6 @@ Each row can be computed independently within the same timestep.
 
 Output:
 {File Name: Static Schedule time,  Dynamic Schedule time, Guided Schedule time}
-{openmp_sol1_2022B4A70596P.c: 2.269233019 sec, 4.204496124 sec, 2.278789018 sec}
-{openmp_sol2_2022B4A70596P.c: 2.163639429 sec, 2.899663278 sec, 2.149923273 sec}
-{openmp_sol3_2022B4A70596P.c: 1.184653899 sec, 1.630271171 sec, 1.201278312 sec}
+{openmp_sol1_2022xxxx.c: 2.269233019 sec, 4.204496124 sec, 2.278789018 sec}
+{openmp_sol2_2022xxxx.c: 2.163639429 sec, 2.899663278 sec, 2.149923273 sec}
+{openmp_sol3_2022xxxx.c: 1.184653899 sec, 1.630271171 sec, 1.201278312 sec}
