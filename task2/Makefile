@@ -1,4 +1,4 @@
-ID := 2022B4A70596P
+ID := 2022xxxx
 FILE1 := openmp_sol1_$(ID).c
 FILE2 := openmp_sol2_$(ID).c
 FILE3 := openmp_sol3_$(ID).c
