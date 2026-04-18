@@ -6,6 +6,7 @@
 #include <time.h>
 #include <omp.h>
 #include "cJSON.h"
+#include "cJSON.c"
 
 #define FILE_NAME "Movies_and_TV_5.json"
 #define MAX_ID_LEN 64

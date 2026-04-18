@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <time.h>
 #include "cJSON.h"
+#include "cJSON.c"
 
 #define FILE_NAME "Movies_and_TV_5.json"
 #define TABLE_SIZE 4000007 // a large prime number

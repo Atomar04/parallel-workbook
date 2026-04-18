@@ -17,6 +17,7 @@
 
 extern "C" {
 #include "cJSON.h"
+#include "cJSON.c"
 }
 
 #define INPUT_FILE   "Movies_and_TV_5.json"
