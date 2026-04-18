@@ -16,13 +16,11 @@
         } \
     } while (0)
 
-
 __global__ void aggregateRatingsKernel(const int* review_movie_ids, 
                                        const float* review_ratings, 
                                        float* movie_rating_sums, 
                                        int* movie_review_counts, 
                                        int num_reviews) {
-
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < num_reviews) {
@@ -34,13 +32,11 @@ __global__ void aggregateRatingsKernel(const int* review_movie_ids,
     }
 }
 
-
 struct MovieResult {
     std::string asin;
     float avg_rating;
     int review_count;
 };
-
 
 bool compareMovies(const MovieResult& a, const MovieResult& b) {
     if (a.avg_rating != b.avg_rating) {
@@ -101,40 +97,61 @@ int main() {
     CUDA_CHECK(cudaMemset(d_movie_rating_sums, 0, num_unique_movies * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_movie_review_counts, 0, num_unique_movies * sizeof(int)));
 
+    // Create events for the two phases we want to compare against the optimized version
+    cudaEvent_t start_h2d, stop_h2d;
+    cudaEvent_t start_kernel, stop_kernel;
+    
+    CUDA_CHECK(cudaEventCreate(&start_h2d)); CUDA_CHECK(cudaEventCreate(&stop_h2d));
+    CUDA_CHECK(cudaEventCreate(&start_kernel)); CUDA_CHECK(cudaEventCreate(&stop_kernel));
+
+    // ==========================================
+    // Phase 1: Host to Device Memory Copy
+    // ==========================================
+    CUDA_CHECK(cudaEventRecord(start_h2d));
+    
     CUDA_CHECK(cudaMemcpy(d_review_movie_ids, host_review_movie_ids.data(), num_reviews * sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_review_ratings, host_review_ratings.data(), num_reviews * sizeof(float), cudaMemcpyHostToDevice));
+    
+    CUDA_CHECK(cudaEventRecord(stop_h2d));
 
-   
     int threadsPerBlock = 256;
     int blocksPerGrid = (num_reviews + threadsPerBlock - 1) / threadsPerBlock;
 
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-
     std::cout << "Launching Kernel..." << std::endl;
-    
-    CUDA_CHECK(cudaEventRecord(start));
 
-    // Execute Kernel
+    // ==========================================
+    // Phase 2: Kernel Execution
+    // ==========================================
+    CUDA_CHECK(cudaEventRecord(start_kernel));
+
     aggregateRatingsKernel<<<blocksPerGrid, threadsPerBlock>>>(
         d_review_movie_ids, d_review_ratings, d_movie_rating_sums, d_movie_review_counts, num_reviews
     );
 
-    // Stop timing
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
+    CUDA_CHECK(cudaEventRecord(stop_kernel));
 
-    float milliseconds = 0;
-    CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
-
-    
+    // ==========================================
+    // Untimed Phase: Device to Host Memory Copy
+    // ==========================================
     std::vector<float> host_movie_rating_sums(num_unique_movies);
     std::vector<int> host_movie_review_counts(num_unique_movies);
 
     CUDA_CHECK(cudaMemcpy(host_movie_rating_sums.data(), d_movie_rating_sums, num_unique_movies * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(host_movie_review_counts.data(), d_movie_review_counts, num_unique_movies * sizeof(int), cudaMemcpyDeviceToHost));
 
+    // Synchronize events before reading elapsed times
+    CUDA_CHECK(cudaEventSynchronize(stop_h2d));
+    CUDA_CHECK(cudaEventSynchronize(stop_kernel));
+
+    // Calculate times
+    float time_h2d = 0, time_kernel = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&time_h2d, start_h2d, stop_h2d));
+    CUDA_CHECK(cudaEventElapsedTime(&time_kernel, start_kernel, stop_kernel));
+    
+    // Total represents H2D + Kernel (matching the timing window of the optimized stream code)
+    float total_gpu_time = time_h2d + time_kernel;
+
+    // Post-processing and sorting
     std::vector<MovieResult> results;
     for (int i = 0; i < num_unique_movies; ++i) {
         if (host_movie_review_counts[i] > 0) {
@@ -145,6 +162,7 @@ int main() {
 
     std::sort(results.begin(), results.end(), compareMovies);
 
+    // Output Data
     std::cout << "\n============================================\n";
     std::cout << "Top 10 Rated Movies\n";
     std::cout << "============================================\n";
@@ -155,15 +173,21 @@ int main() {
     }
 
     std::cout << "\n============================================\n";
-    std::cout << "Kernel Execution Time: " << milliseconds << " ms\n";
+    std::cout << "             PERFORMANCE METRICS            \n";
+    std::cout << "============================================\n";
+    std::cout << "Host-to-Device (H2D) Time : " << time_h2d << " ms\n";
+    std::cout << "Kernel Execution Time     : " << time_kernel << " ms\n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "Total Time (H2D + Kernel) : " << total_gpu_time << " ms\n";
     std::cout << "============================================\n";
 
+    // Cleanup
     CUDA_CHECK(cudaFree(d_review_movie_ids));
     CUDA_CHECK(cudaFree(d_review_ratings));
     CUDA_CHECK(cudaFree(d_movie_rating_sums));
     CUDA_CHECK(cudaFree(d_movie_review_counts));
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaEventDestroy(start_h2d)); CUDA_CHECK(cudaEventDestroy(stop_h2d));
+    CUDA_CHECK(cudaEventDestroy(start_kernel)); CUDA_CHECK(cudaEventDestroy(stop_kernel));
 
     return 0;
 }

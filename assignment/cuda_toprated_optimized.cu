@@ -27,14 +27,12 @@ __global__ void optimizedAggregateRatingsKernel(const int* __restrict__ review_m
                                                 float* __restrict__ movie_rating_sums, 
                                                 int* __restrict__ movie_review_counts, 
                                                 int dummy_id) {
-    // [Optimization]: Shared memory usage to reduce global memory bandwidth
     __shared__ int s_ids[THREADS_PER_BLOCK];
     __shared__ float s_ratings[THREADS_PER_BLOCK];
 
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int tx = threadIdx.x;
 
-    // [Optimization]: Memory coalescing and aligned global memory accesses
     s_ids[tx] = review_movie_ids[tid];
     s_ratings[tx] = review_ratings[tid];
     __syncthreads();
@@ -42,23 +40,16 @@ __global__ void optimizedAggregateRatingsKernel(const int* __restrict__ review_m
     int my_id = s_ids[tx];
     float my_rating = s_ratings[tx];
 
-    // [Optimization]: Minimizing thread divergence
-    // By padding the input array, we removed the "if (tid < n)" branch.
-    // All threads execute identically without warp divergence.
-
-    // [Optimization]: Warp-level primitives and reduction techniques
     int lane_id = tx % 32;
     
-    // Step 1: Find the leader thread for this specific movie ID within the warp
     int leader = lane_id; 
     for (int i = 0; i < 32; ++i) {
         int peer_id = __shfl_sync(0xffffffff, my_id, i);
         if (peer_id == my_id && i < leader) {
-            leader = i; // The thread with the lowest lane_id for this movie is the leader
+            leader = i; 
         }
     }
 
-    // Step 2: Intra-warp reduction (Accumulate ratings across the warp)
     float warp_sum = 0.0f;
     int warp_count = 0;
     for (int i = 0; i < 32; ++i) {
@@ -70,15 +61,12 @@ __global__ void optimizedAggregateRatingsKernel(const int* __restrict__ review_m
         }
     }
 
-    // Step 3: Only the warp leader executes the atomic global write
-    // This drastically reduces global memory contention and bandwidth
     if (lane_id == leader && my_id != dummy_id) {
         atomicAdd(&movie_rating_sums[my_id], warp_sum);
         atomicAdd(&movie_review_counts[my_id], warp_count);
     }
 }
 
-// Struct to help sort the final results
 struct MovieResult {
     std::string asin;
     float avg_rating;
@@ -105,7 +93,7 @@ int main() {
     std::vector<std::string> id_to_asin;
 
     std::string line, asin, rating_str;
-    std::getline(file, line); // Skip header
+    std::getline(file, line);
 
     std::cout << "Loading data from CSV..." << std::endl;
     while (std::getline(file, line)) {
@@ -124,33 +112,27 @@ int main() {
 
     int num_reviews = temp_asins.size();
     int num_unique_movies = id_to_asin.size();
-    int dummy_id = num_unique_movies; // Used for padded threads
+    int dummy_id = num_unique_movies; 
 
-    // Calculate padding so elements divide perfectly among Streams and Block sizes
     int chunk_size = ((num_reviews + NUM_STREAMS - 1) / NUM_STREAMS);
-    // Align chunk size to block size
     chunk_size = ((chunk_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK) * THREADS_PER_BLOCK;
     int padded_reviews = chunk_size * NUM_STREAMS;
 
-    // Allocate Pinned Host Memory for Streams overlap
     int *h_review_movie_ids;
     float *h_review_ratings;
     CUDA_CHECK(cudaMallocHost(&h_review_movie_ids, padded_reviews * sizeof(int)));
     CUDA_CHECK(cudaMallocHost(&h_review_ratings, padded_reviews * sizeof(float)));
 
-    // Populate pinned memory and pad the rest
     for (int i = 0; i < padded_reviews; ++i) {
         if (i < num_reviews) {
             h_review_movie_ids[i] = asin_to_id[temp_asins[i]];
             h_review_ratings[i] = temp_ratings[i];
         } else {
-            // Padding elements mapped to dummy_id to avoid branch divergence
             h_review_movie_ids[i] = dummy_id;
             h_review_ratings[i] = 0.0f;
         }
     }
 
-    // Allocate Device Memory (Adding 1 to unique movies to hold dummy writes safely)
     int *d_review_movie_ids, *d_movie_review_counts;
     float *d_review_ratings, *d_movie_rating_sums;
 
@@ -162,51 +144,70 @@ int main() {
     CUDA_CHECK(cudaMemset(d_movie_rating_sums, 0, (num_unique_movies + 1) * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_movie_review_counts, 0, (num_unique_movies + 1) * sizeof(int)));
 
-    // Create CUDA Streams and Events
     cudaStream_t streams[NUM_STREAMS];
+    cudaEvent_t start_kernel[NUM_STREAMS], stop_kernel[NUM_STREAMS];
+    
     for (int i = 0; i < NUM_STREAMS; i++) {
         CUDA_CHECK(cudaStreamCreate(&streams[i]));
+        CUDA_CHECK(cudaEventCreate(&start_kernel[i]));
+        CUDA_CHECK(cudaEventCreate(&stop_kernel[i]));
     }
 
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
+    // Global pipeline events
+    cudaEvent_t start_total, stop_total;
+    CUDA_CHECK(cudaEventCreate(&start_total));
+    CUDA_CHECK(cudaEventCreate(&stop_total));
 
     std::cout << "Launching Optimized Kernel with Streams..." << std::endl;
     
-    CUDA_CHECK(cudaEventRecord(start));
+    // Start global pipeline timer (H2D + Kernel overlap)
+    CUDA_CHECK(cudaEventRecord(start_total));
 
-    // [Optimization]: CUDA Streams for overlapping computation and data transfer
     for (int i = 0; i < NUM_STREAMS; ++i) {
         int offset = i * chunk_size;
         int blocks = chunk_size / THREADS_PER_BLOCK;
 
-        // Async Memcpy overlaps with kernel execution of other streams
+        // Async Memcpy (H2D)
         CUDA_CHECK(cudaMemcpyAsync(&d_review_movie_ids[offset], &h_review_movie_ids[offset], 
                                    chunk_size * sizeof(int), cudaMemcpyHostToDevice, streams[i]));
         CUDA_CHECK(cudaMemcpyAsync(&d_review_ratings[offset], &h_review_ratings[offset], 
                                    chunk_size * sizeof(float), cudaMemcpyHostToDevice, streams[i]));
 
+        // Record start event specifically mapped to this stream
+        CUDA_CHECK(cudaEventRecord(start_kernel[i], streams[i]));
+
         optimizedAggregateRatingsKernel<<<blocks, THREADS_PER_BLOCK, 0, streams[i]>>>(
             &d_review_movie_ids[offset], &d_review_ratings[offset], 
             d_movie_rating_sums, d_movie_review_counts, dummy_id
         );
+
+        // Record stop event specifically mapped to this stream
+        CUDA_CHECK(cudaEventRecord(stop_kernel[i], streams[i]));
     }
 
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
+    // Explicitly sync the device before stopping the global timer to ensure all streams are fully completed
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaEventRecord(stop_total));
+    CUDA_CHECK(cudaEventSynchronize(stop_total));
 
-    float milliseconds = 0;
-    CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+    // Calculate all timing metrics
+    float total_h2d_kernel_time = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&total_h2d_kernel_time, start_total, stop_total));
 
-    // Copy results back to Host
+    float stream_kernel_times[NUM_STREAMS];
+    float sum_kernel_times = 0.0f;
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        CUDA_CHECK(cudaEventElapsedTime(&stream_kernel_times[i], start_kernel[i], stop_kernel[i]));
+        sum_kernel_times += stream_kernel_times[i];
+    }
+
+    // Untimed Phase: Device to Host Memory Copy
     std::vector<float> host_movie_rating_sums(num_unique_movies);
     std::vector<int> host_movie_review_counts(num_unique_movies);
 
     CUDA_CHECK(cudaMemcpy(host_movie_rating_sums.data(), d_movie_rating_sums, num_unique_movies * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(host_movie_review_counts.data(), d_movie_review_counts, num_unique_movies * sizeof(int), cudaMemcpyDeviceToHost));
 
-    // CPU Post-Processing
     std::vector<MovieResult> results;
     for (int i = 0; i < num_unique_movies; ++i) {
         if (host_movie_review_counts[i] > 0) {
@@ -228,12 +229,21 @@ int main() {
     }
 
     std::cout << "\n============================================\n";
-    std::cout << "Optimized Execution Time: " << milliseconds << " ms\n";
+    std::cout << "             PERFORMANCE METRICS            \n";
+    std::cout << "============================================\n";
+    for(int i = 0; i < NUM_STREAMS; i++) {
+        std::cout << "Stream " << i << " Kernel Time    : " << stream_kernel_times[i] << " ms\n";
+    }
+    std::cout << "--------------------------------------------\n";
+    std::cout << "Sum of Stream Kernels     : " << sum_kernel_times << " ms\n";
+    std::cout << "Total Time (H2D + Kernel) : " << total_h2d_kernel_time << " ms\n";
     std::cout << "============================================\n";
 
     // Cleanup
     for (int i = 0; i < NUM_STREAMS; i++) {
         CUDA_CHECK(cudaStreamDestroy(streams[i]));
+        CUDA_CHECK(cudaEventDestroy(start_kernel[i]));
+        CUDA_CHECK(cudaEventDestroy(stop_kernel[i]));
     }
     CUDA_CHECK(cudaFreeHost(h_review_movie_ids));
     CUDA_CHECK(cudaFreeHost(h_review_ratings));
@@ -241,8 +251,8 @@ int main() {
     CUDA_CHECK(cudaFree(d_review_ratings));
     CUDA_CHECK(cudaFree(d_movie_rating_sums));
     CUDA_CHECK(cudaFree(d_movie_review_counts));
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaEventDestroy(start_total));
+    CUDA_CHECK(cudaEventDestroy(stop_total));
 
     return 0;
 }
