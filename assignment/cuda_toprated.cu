@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 
+// Definition for error checking
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -16,6 +17,7 @@
         } \
     } while (0)
 
+// CUDA Kernel
 __global__ void aggregateRatingsKernel(const int* review_movie_ids, 
                                        const float* review_ratings, 
                                        float* movie_rating_sums, 
@@ -104,9 +106,7 @@ int main() {
     CUDA_CHECK(cudaEventCreate(&start_h2d)); CUDA_CHECK(cudaEventCreate(&stop_h2d));
     CUDA_CHECK(cudaEventCreate(&start_kernel)); CUDA_CHECK(cudaEventCreate(&stop_kernel));
 
-    // ==========================================
     // Phase 1: Host to Device Memory Copy
-    // ==========================================
     CUDA_CHECK(cudaEventRecord(start_h2d));
     
     CUDA_CHECK(cudaMemcpy(d_review_movie_ids, host_review_movie_ids.data(), num_reviews * sizeof(int), cudaMemcpyHostToDevice));
@@ -119,9 +119,7 @@ int main() {
 
     std::cout << "Launching Kernel..." << std::endl;
 
-    // ==========================================
     // Phase 2: Kernel Execution
-    // ==========================================
     CUDA_CHECK(cudaEventRecord(start_kernel));
 
     aggregateRatingsKernel<<<blocksPerGrid, threadsPerBlock>>>(
@@ -130,9 +128,6 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(stop_kernel));
 
-    // ==========================================
-    // Untimed Phase: Device to Host Memory Copy
-    // ==========================================
     std::vector<float> host_movie_rating_sums(num_unique_movies);
     std::vector<int> host_movie_review_counts(num_unique_movies);
 

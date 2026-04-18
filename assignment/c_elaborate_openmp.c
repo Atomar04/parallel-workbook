@@ -136,7 +136,7 @@ int main() {
     // results[i] is private to iteration i, so no race occurs there
     // scalar counters are combined safely using OpenMP reduction
      
-    #pragma omp parallel for schedule(static) reduction(+:elaborate_reviews, parse_errors)
+    #pragma omp parallel for schedule(static) reduction(+:elaborate_reviews, parse_errors) 
     for (long i = 0; i < (long)n; i++) {
         cJSON *root = cJSON_Parse(lines[i]);
         if (!root) {

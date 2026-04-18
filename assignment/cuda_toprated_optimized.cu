@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 
+// Definition for error checking
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -19,9 +20,7 @@
 const int THREADS_PER_BLOCK = 256;
 const int NUM_STREAMS = 4;
 
-// ---------------------------------------------------------
-// OPTIMIZED CUDA KERNEL
-// ---------------------------------------------------------
+// CUDA Kernel
 __global__ void optimizedAggregateRatingsKernel(const int* __restrict__ review_movie_ids, 
                                                 const float* __restrict__ review_ratings, 
                                                 float* __restrict__ movie_rating_sums, 
@@ -73,6 +72,7 @@ struct MovieResult {
     int review_count;
 };
 
+// Creating a compare function for review counts
 bool compareMovies(const MovieResult& a, const MovieResult& b) {
     if (a.avg_rating != b.avg_rating) return a.avg_rating > b.avg_rating;
     return a.review_count > b.review_count; 
@@ -95,6 +95,7 @@ int main() {
     std::string line, asin, rating_str;
     std::getline(file, line);
 
+    // Reading from file
     std::cout << "Loading data from CSV..." << std::endl;
     while (std::getline(file, line)) {
         std::stringstream ss(line);
@@ -123,6 +124,7 @@ int main() {
     CUDA_CHECK(cudaMallocHost(&h_review_movie_ids, padded_reviews * sizeof(int)));
     CUDA_CHECK(cudaMallocHost(&h_review_ratings, padded_reviews * sizeof(float)));
 
+    // Padding
     for (int i = 0; i < padded_reviews; ++i) {
         if (i < num_reviews) {
             h_review_movie_ids[i] = asin_to_id[temp_asins[i]];
@@ -144,6 +146,7 @@ int main() {
     CUDA_CHECK(cudaMemset(d_movie_rating_sums, 0, (num_unique_movies + 1) * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_movie_review_counts, 0, (num_unique_movies + 1) * sizeof(int)));
 
+    // Creating streams
     cudaStream_t streams[NUM_STREAMS];
     cudaEvent_t start_kernel[NUM_STREAMS], stop_kernel[NUM_STREAMS];
     
@@ -201,7 +204,6 @@ int main() {
         sum_kernel_times += stream_kernel_times[i];
     }
 
-    // Untimed Phase: Device to Host Memory Copy
     std::vector<float> host_movie_rating_sums(num_unique_movies);
     std::vector<int> host_movie_review_counts(num_unique_movies);
 
